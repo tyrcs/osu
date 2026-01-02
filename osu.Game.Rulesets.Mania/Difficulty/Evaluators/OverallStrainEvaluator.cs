@@ -16,7 +16,7 @@ namespace osu.Game.Rulesets.Mania.Difficulty.Evaluators
         private const double release_threshold = 30;
         //private const double release_exponent = 3;
         private const double release_multiplier = 0.27;
-        private const double overlap_max_bonus = 1;
+        private const double overlap_max_bonus = 0.5; // 1 was incredibly high imo
         private const double hold_threshold = 30;
         //private const double hold_exponent = 4;
         private const double hold_multiplier = 0.27;
@@ -38,18 +38,32 @@ namespace osu.Game.Rulesets.Mania.Difficulty.Evaluators
 
             double closestOverlapEndTime = Math.Abs(endTime - startTime); // Lowest value we can assume with the current information
             double closestOverlapStartTime = Math.Abs(endTime - startTime);
+            //double overlapTotal = 0;
+            //double overlapColumnCount = 0;
             double overlapBonus = 0; // Addition to the current note in case it's a hold and has to be released awkwardly
             double furthestHoldEndTime = 0;
             double furthestHoldStartTime = 0;
             double holdBonus = 0; // Factor to all additional strains in case something else is held
             double lengthBonus = 0; // Bonus for long notes especially for super short ones
+            //double overlapScale;
             //double holdReferenceValue = 10000;
 
 
-            foreach (var maniaPrevious in maniaCurrent.PreviousHitObjects)
+            foreach (var maniaPreviousLoop in maniaCurrent.PreviousHitObjects)
             {
-                if (maniaPrevious is null)
+                if (maniaPreviousLoop is null)
                     continue;
+
+                // solution for the chord order issue
+                // the same chord contains either current or the NextInColumn of each note in PreviousHitObjects
+                // here to check if latter one is the case
+                var maniaPrevious = maniaPreviousLoop;
+                var maniaPreviousNext = maniaPrevious.NextInColumn(0);
+                if (maniaPreviousNext != null &&
+                    maniaPreviousNext.StartTime == startTime)
+                {
+                    maniaPrevious = maniaPreviousNext;
+                }
 
                 // The current note is overlapped if a previous note or end is overlapping the current note body
                 // isOverlapping |= Precision.DefinitelyBigger(maniaPrevious.EndTime, startTime, 1) &&
@@ -57,22 +71,34 @@ namespace osu.Game.Rulesets.Mania.Difficulty.Evaluators
                 //                 Precision.DefinitelyBigger(startTime, maniaPrevious.StartTime, 1);
 
                 // For overlap time interval detection we only account for overlapped notes
-                if (Precision.DefinitelyBigger(maniaPrevious.EndTime, startTime, 1) &&
-                    Precision.DefinitelyBigger(endTime, maniaPrevious.EndTime, 1) &&
-                    Precision.DefinitelyBigger(startTime, maniaPrevious.StartTime, 1))
-                {
-                    isOverlapping = true;
-                    closestOverlapStartTime = Math.Min(closestOverlapStartTime, Math.Abs(startTime - maniaPrevious.EndTime));
-                    closestOverlapEndTime = Math.Min(closestOverlapEndTime, Math.Abs(endTime - maniaPrevious.EndTime));
-                }
+                // if (Precision.DefinitelyBigger(maniaPrevious.EndTime, startTime, 1) &&
+                //     Precision.DefinitelyBigger(endTime, maniaPrevious.EndTime, 1) &&
+                //     Precision.DefinitelyBigger(startTime, maniaPrevious.StartTime, 1))
+                // {
+                //     isOverlapping = true;
+                //     overlapTotal += Math.Min(Math.Abs(startTime - maniaPrevious.EndTime), Math.Abs(endTime - maniaPrevious.EndTime)) * DifficultyCalculationUtils.Logistic(x: Math.Abs(startTime - maniaPrevious.StartTime), multiplier: release_multiplier, midpointOffset: release_threshold);
+                //     overlapColumnCount++;
+                // }
 
+                // for some reason the chord order matters :(
+                // overlapScale = DifficultyCalculationUtils.Logistic(x: Math.Abs(startTime - maniaPrevious.StartTime), multiplier: release_multiplier, midpointOffset: release_threshold);
+                // closestOverlapStartTime = Math.Min(closestOverlapStartTime, Math.Abs(startTime - maniaPrevious.EndTime));
+                // closestOverlapEndTime = Math.Min(closestOverlapEndTime, Math.Abs(endTime - maniaPrevious.EndTime));
 
                 // We give a slight bonus to everything if something is held meanwhile
-                // This is mutually exclusive to the overlap bonus
-                if (Precision.DefinitelyBigger(maniaPrevious.EndTime, endTime, 1) &&
+                // im not sure why the overlap bonus requires the LNs to be staggered so i just incorporated it into here
+                // might could just rename it to release bonus instead
+                if (Precision.DefinitelyBigger(maniaPrevious.EndTime, startTime, 1) &&
                     Precision.DefinitelyBigger(startTime, maniaPrevious.StartTime, 1))
                 {
                     isHeld = true;
+                    // needs to be an LN to gain release bonus
+                    if (Precision.DefinitelyBigger(endTime, startTime, 1))
+                    {
+                        isOverlapping = true;
+                        closestOverlapStartTime = Math.Min(closestOverlapStartTime, Math.Abs(startTime - maniaPrevious.EndTime));
+                        closestOverlapEndTime = Math.Min(closestOverlapEndTime, Math.Abs(endTime - maniaPrevious.EndTime));
+                    }
                     furthestHoldStartTime = Math.Max(furthestHoldStartTime, Math.Abs(startTime - maniaPrevious.StartTime));
                     furthestHoldEndTime = Math.Max(furthestHoldEndTime, Math.Abs(endTime - maniaPrevious.EndTime));
                     //holdReferenceValue = Math.Min(holdReferenceValue, maniaPrevious.HoldBonusReferenced);
@@ -81,13 +107,18 @@ namespace osu.Game.Rulesets.Mania.Difficulty.Evaluators
 
             if (isOverlapping)
             {
-                //double overlapStartBonus = Math.Min(Math.Pow(closestOverlapStartTime / release_threshold, Math.Log2(release_exponent)), 1);
-                //double overlapEndBonus = Math.Min(Math.Pow(closestOverlapEndTime / release_threshold, Math.Log2(release_exponent)), 1);
-                //double overlapStartBonus = DifficultyCalculationUtils.Logistic(x: closestOverlapStartTime, multiplier: release_multiplier, midpointOffset: release_threshold);
-                double overlapStartBonus = 1;
+                double overlapStartBonus = DifficultyCalculationUtils.Logistic(x: closestOverlapStartTime, multiplier: release_multiplier, midpointOffset: release_threshold);
                 double overlapEndBonus = DifficultyCalculationUtils.Logistic(x: closestOverlapEndTime, multiplier: release_multiplier, midpointOffset: release_threshold);
                 overlapBonus = Math.Min(overlapStartBonus, overlapEndBonus) * overlap_max_bonus;
             }
+            // {
+            //     double overlapStartBonus = Math.Min(Math.Pow(closestOverlapStartTime / release_threshold, Math.Log2(release_exponent)), 1);
+            //     double overlapEndBonus = Math.Min(Math.Pow(closestOverlapEndTime / release_threshold, Math.Log2(release_exponent)), 1);
+            //     double overlapStartBonus = DifficultyCalculationUtils.Logistic(x: closestOverlapStartTime, multiplier: release_multiplier, midpointOffset: release_threshold);
+            //     double overlapStartBonus = 1;
+            //     double overlapEndBonus = DifficultyCalculationUtils.Logistic(x: closestOverlapEndTime, multiplier: release_multiplier, midpointOffset: release_threshold);
+            //     overlapBonus = Math.Min(overlapStartBonus, overlapEndBonus) * overlap_max_bonus;
+            // }
 
             // proposal function
             // (x / threshold) ^ log2(exponent)
@@ -99,10 +130,10 @@ namespace osu.Game.Rulesets.Mania.Difficulty.Evaluators
 
             if (isHeld)
             {
-                //double holdStartBonus = DifficultyCalculationUtils.Logistic(x: furthestHoldStartTime, multiplier: hold_multiplier, midpointOffset: hold_threshold);
-                //double holdEndBonus = DifficultyCalculationUtils.Logistic(x: furthestHoldEndTime, multiplier: hold_multiplier, midpointOffset: hold_threshold);
-                //double holdBonusDecay = DifficultyCalculationUtils.Logistic(x: holdReferenceValue, multiplier: -decay_multiplier, midpointOffset: decay_threshold);
-                holdBonus = hold_max_bonus; //Math.Min(holdStartBonus, holdEndBonus) * 
+                double holdStartBonus = DifficultyCalculationUtils.Logistic(x: furthestHoldStartTime, multiplier: hold_multiplier, midpointOffset: hold_threshold);
+                double holdEndBonus = DifficultyCalculationUtils.Logistic(x: furthestHoldEndTime, multiplier: hold_multiplier, midpointOffset: hold_threshold);
+                // double holdBonusDecay = DifficultyCalculationUtils.Logistic(x: holdReferenceValue, multiplier: -decay_multiplier, midpointOffset: decay_threshold);
+                holdBonus = Math.Min(holdStartBonus, holdEndBonus) * hold_max_bonus;
             }
 
             // ln length bonus

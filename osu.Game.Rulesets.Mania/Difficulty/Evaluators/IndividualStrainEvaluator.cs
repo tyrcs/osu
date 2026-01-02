@@ -46,10 +46,10 @@ namespace osu.Game.Rulesets.Mania.Difficulty.Evaluators
 
             if (isHeld)
             {
-                //double holdStartBonus = DifficultyCalculationUtils.Logistic(x: furthestHoldStartTime, multiplier: hold_multiplier, midpointOffset: hold_threshold);
-                //double holdEndBonus = DifficultyCalculationUtils.Logistic(x: furthestHoldEndTime, multiplier: hold_multiplier, midpointOffset: hold_threshold);
-                //double holdBonusDecay = DifficultyCalculationUtils.Logistic(x: holdReferenceValue, multiplier: -decay_multiplier, midpointOffset: decay_threshold);
-                holdBonus = hold_max_bonus; //Math.Min(holdStartBonus, holdEndBonus) * 
+                double holdStartBonus = DifficultyCalculationUtils.Logistic(x: furthestHoldStartTime, multiplier: hold_multiplier, midpointOffset: hold_threshold);
+                double holdEndBonus = DifficultyCalculationUtils.Logistic(x: furthestHoldEndTime, multiplier: hold_multiplier, midpointOffset: hold_threshold);
+                // double holdBonusDecay = DifficultyCalculationUtils.Logistic(x: holdReferenceValue, multiplier: -decay_multiplier, midpointOffset: decay_threshold);
+                holdBonus = Math.Min(holdStartBonus, holdEndBonus) * hold_max_bonus;
             }
 
             return 2.0 * (1 + holdBonus);
