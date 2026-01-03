@@ -2,52 +2,52 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
-using System.Linq;
-using NUnit.Framework;
 using osu.Framework.Utils;
 using osu.Game.Rulesets.Difficulty.Preprocessing;
 using osu.Game.Rulesets.Difficulty.Utils;
 using osu.Game.Rulesets.Mania.Difficulty.Preprocessing;
+using osu.Game.Rulesets.Mania.Difficulty.Utils;
 
 namespace osu.Game.Rulesets.Mania.Difficulty.Evaluators
 {
     public class OverallStrainEvaluator
     {
-        private const double release_threshold = 30;
-        //private const double release_exponent = 3;
-        private const double release_multiplier = 0.27;
-        private const double overlap_max_bonus = 0.5; // 1 was incredibly high imo
-        private const double hold_threshold = 30;
-        //private const double hold_exponent = 4;
-        private const double hold_multiplier = 0.27;
-        private const double hold_max_bonus = 0.25;
-        //private const double length_threshold = 30; // RC value
-        //private const double length_mantissa = 10;
-        //private const double length_max_bonus = 1;
-        //private const double length_min_bonus = 0.01;
-        //private const double decay_threshold = 25;
-        //private const double decay_multiplier = 0.3;
+
+        // All constants are subject to change
+
+        private const double press_bonus_threshold_1 = 31; // 1/8 at 240BPM
+        private const double press_bonus_multiplier_1 = 0.27;
+        private const double press_bonus_threshold_2 = 250; // 1/1 at 240BPM
+        private const double press_bonus_multiplier_2 = 0.036;
+        private const double press_bonus_max_value = 0.25;
+        private const double press_bonus_min_portion = 0.05;
+
+        private const double hold_bonus_release_time_addition = 31; // 1/8 at 240BPM
+        private const double hold_bonus_threshold = 31; // 1/8 at 240BPM
+        private const double hold_bonus_multiplier = 0.27;
+        private const double hold_bonus_max_value = 0.75; // relatively high because there are not too many LNs with many same hand notes
+        private const double hold_intensity_steepness = 5; // amount of Intensity for hold_bonus_max_value - holdBonus to cut in half
+        private const double hold_intensity_threshold = 250; // 1/1 at 240BPM; this is the threshold interval to get extra intensity
+        private const double hold_intensity_exponent = 4;
+        private const double hold_intensity_max_bonus = 4;
+
+        private const double release_bonus_threshold = 62; // 1/4 at 240BPM
+        private const double release_bonus_multiplier = 0.075;
+        private const double release_bonus_max_value = 0.5; // the release could be considerably tricky
+
+        private const double column_distance_decay = 0.333333;
 
         public static double EvaluateDifficultyOf(DifficultyHitObject current)
         {
             var maniaCurrent = (ManiaDifficultyHitObject)current;
             double startTime = maniaCurrent.StartTime;
             double endTime = maniaCurrent.EndTime;
-            bool isOverlapping = false;
-            bool isHeld = false;
+            int column = maniaCurrent.Column;
+            int totalColumns = maniaCurrent.PreviousHitObjects.Length;
 
-            double closestOverlapEndTime = Math.Abs(endTime - startTime); // Lowest value we can assume with the current information
-            double closestOverlapStartTime = Math.Abs(endTime - startTime);
-            //double overlapTotal = 0;
-            //double overlapColumnCount = 0;
-            double overlapBonus = 0; // Addition to the current note in case it's a hold and has to be released awkwardly
-            double furthestHoldEndTime = 0;
-            double furthestHoldStartTime = 0;
-            double holdBonus = 0; // Factor to all additional strains in case something else is held
-            double lengthBonus = 0; // Bonus for long notes especially for super short ones
-            //double overlapScale;
-            //double holdReferenceValue = 10000;
-
+            double pressBonus = 0;
+            double holdBonus = 0;
+            double releaseBonus = 0;
 
             foreach (var maniaPreviousLoop in maniaCurrent.PreviousHitObjects)
             {
@@ -56,7 +56,6 @@ namespace osu.Game.Rulesets.Mania.Difficulty.Evaluators
 
                 // solution for the chord order issue
                 // the same chord contains either current or the NextInColumn of each note in PreviousHitObjects
-                // here to check if latter one is the case
                 var maniaPrevious = maniaPreviousLoop;
                 var maniaPreviousNext = maniaPrevious.NextInColumn(0);
                 if (maniaPreviousNext != null &&
@@ -65,92 +64,147 @@ namespace osu.Game.Rulesets.Mania.Difficulty.Evaluators
                     maniaPrevious = maniaPreviousNext;
                 }
 
-                // The current note is overlapped if a previous note or end is overlapping the current note body
-                // isOverlapping |= Precision.DefinitelyBigger(maniaPrevious.EndTime, startTime, 1) &&
-                //                 Precision.DefinitelyBigger(endTime, maniaPrevious.EndTime, 1) &&
-                //                 Precision.DefinitelyBigger(startTime, maniaPrevious.StartTime, 1);
+                // initialzation for various calculation
 
-                // For overlap time interval detection we only account for overlapped notes
-                // if (Precision.DefinitelyBigger(maniaPrevious.EndTime, startTime, 1) &&
-                //     Precision.DefinitelyBigger(endTime, maniaPrevious.EndTime, 1) &&
-                //     Precision.DefinitelyBigger(startTime, maniaPrevious.StartTime, 1))
-                // {
-                //     isOverlapping = true;
-                //     overlapTotal += Math.Min(Math.Abs(startTime - maniaPrevious.EndTime), Math.Abs(endTime - maniaPrevious.EndTime)) * DifficultyCalculationUtils.Logistic(x: Math.Abs(startTime - maniaPrevious.StartTime), multiplier: release_multiplier, midpointOffset: release_threshold);
-                //     overlapColumnCount++;
-                // }
+                int previousColumn = maniaPrevious.Column;
+                if (previousColumn == column) // All of the calculation is based on cross-column notes
+                    continue;
 
-                // for some reason the chord order matters :(
-                // overlapScale = DifficultyCalculationUtils.Logistic(x: Math.Abs(startTime - maniaPrevious.StartTime), multiplier: release_multiplier, midpointOffset: release_threshold);
-                // closestOverlapStartTime = Math.Min(closestOverlapStartTime, Math.Abs(startTime - maniaPrevious.EndTime));
-                // closestOverlapEndTime = Math.Min(closestOverlapEndTime, Math.Abs(endTime - maniaPrevious.EndTime));
+                double sameHandImpactness = DifficultyUtils.SameHandImpactness(previousColumn, column, totalColumns);
+                double adjacentImpactness = DifficultyUtils.SameHandAdjacentColumnImpactness(previousColumn, column, totalColumns, column_distance_decay);
 
-                // We give a slight bonus to everything if something is held meanwhile
-                // im not sure why the overlap bonus requires the LNs to be staggered so i just incorporated it into here
-                // might could just rename it to release bonus instead
-                if (Precision.DefinitelyBigger(maniaPrevious.EndTime, startTime, 1) &&
+                // I. Press bonus
+                // measure how hard for a note to be pressed correctly
+                // similar to old holdBonus
+                // if current note is pressed while an adjacent same hand LN is held we award a bonus for current note
+
+                //               <<-- V -->>
+                // cur.  :            |
+                // adja. :  [-------------------]
+                //            ____         ____
+                // Bonus :  _/    \_______/    \_ * max_value
+                //          0 1  min_portion  1 0
+
+                if (adjacentImpactness > 0 &&
+                    Precision.DefinitelyBigger(maniaPrevious.EndTime, startTime, 1) &&
                     Precision.DefinitelyBigger(startTime, maniaPrevious.StartTime, 1))
                 {
-                    isHeld = true;
-                    // needs to be an LN to gain release bonus
-                    if (Precision.DefinitelyBigger(endTime, startTime, 1))
-                    {
-                        isOverlapping = true;
-                        closestOverlapStartTime = Math.Min(closestOverlapStartTime, Math.Abs(startTime - maniaPrevious.EndTime));
-                        closestOverlapEndTime = Math.Min(closestOverlapEndTime, Math.Abs(endTime - maniaPrevious.EndTime));
-                    }
-                    furthestHoldStartTime = Math.Max(furthestHoldStartTime, Math.Abs(startTime - maniaPrevious.StartTime));
-                    furthestHoldEndTime = Math.Max(furthestHoldEndTime, Math.Abs(endTime - maniaPrevious.EndTime));
-                    //holdReferenceValue = Math.Min(holdReferenceValue, maniaPrevious.HoldBonusReferenced);
+                    double closestActionTime = Math.Min(Math.Abs(maniaPrevious.EndTime - startTime), Math.Abs(startTime - maniaPrevious.StartTime));
+                    double pressHeadMultiplier = DifficultyCalculationUtils.Logistic(x: closestActionTime, multiplier: press_bonus_multiplier_1, midpointOffset: press_bonus_threshold_1);
+                    double pressBodyMultiplier = DifficultyCalculationUtils.Logistic(x: closestActionTime, multiplier: -press_bonus_multiplier_2, midpointOffset: press_bonus_threshold_2)
+                                               * (1 - press_bonus_min_portion) + press_bonus_min_portion;
+                    pressBonus += adjacentImpactness * pressHeadMultiplier * pressBodyMultiplier;
                 }
+
+                // Bonuses below are only for long notes
+
+                if (Precision.DefinitelyBigger(endTime, startTime, 1))
+                {
+
+                    // II. Hold bonus
+                    // measure how hard for a long note to be held correctly
+                    // this is not the same as old holdBonus
+                    // basically more intense the same hand notes are, more likely the hold will be interrupted
+                    // for the sake of this we need to get all notes that is pressed during the LN
+
+                    if (sameHandImpactness > 0)
+                    {
+                        double holdIntensity = 0;
+                        var heldNote = maniaPrevious.NextInColumn(0);
+                        // loop every note until the LN ends
+                        // we assume current maniaPrevious.StartTime is at most startTime
+
+                        for (int i = 0; i < endTime + hold_bonus_release_time_addition - startTime; i++)
+                        {
+                            if (heldNote is null ||
+                                Precision.DefinitelyBigger(heldNote.StartTime, endTime + hold_bonus_release_time_addition, 1))
+                                break;
+
+                            double heldStartTime = heldNote.StartTime;
+                            // calculate the interval between heldNote and previous note of heldNote
+                            double intensityBonus = 1;
+                            var previousHeldNote = heldNote.PrevInColumn(0);
+                            if (previousHeldNote != null)
+                            {
+                                double heldInterval = Math.Abs(previousHeldNote.StartTime - heldStartTime);
+                                intensityBonus = 1 + Math.Pow(1 - heldInterval / hold_intensity_threshold, hold_intensity_exponent) * hold_intensity_max_bonus;
+                            }
+
+                            double closestActionTime = Math.Min(Math.Abs(endTime + hold_bonus_release_time_addition - heldNote.StartTime), Math.Abs(heldNote.StartTime - startTime));
+                            holdIntensity += DifficultyCalculationUtils.Logistic(x: closestActionTime, multiplier: hold_bonus_multiplier, midpointOffset: hold_bonus_threshold)
+                                             * sameHandImpactness * intensityBonus;
+                            heldNote = heldNote.NextInColumn(0);
+                        }
+
+                        holdBonus += holdIntensity;
+                    }
+
+                    // III. Release bonus
+                    // measure how hard for a long note to be released correctly
+                    // similar to old overlapBonus
+                    // we award a bonus for current note if the note is released while an adjacent same hand LN is held
+                    // due to it being trickier to release
+
+                    //              <<--  V  -->>
+                    // cur.  :------------]
+                    // adja. :  [-------------------]
+                    //              _____________
+                    // Bonus :  ___/             \___ * max_value
+                    //           0        1        0
+
+                    // for the sake of this we need to refer to the last note in the column before current LN ends
+                    // Todo: could make this code incorporated into hold bonus section due to adjacentImpactness overlapping sameHandImpactness
+
+                    if (adjacentImpactness > 0)
+                    {
+                        var heldNote = maniaPrevious;
+                        var overlappingNote = heldNote;
+                        bool isOverlapping = false;
+                        // loop every note until the LN ends to get the overlapped LN (if theres one)
+
+                        for (int i = 0; i < endTime - startTime; i++)
+                        {
+                            if (heldNote is null ||
+                                Precision.DefinitelyBigger(heldNote.StartTime, endTime, 1))
+                                break;
+
+                            if (Precision.DefinitelyBigger(heldNote.EndTime, endTime, 1))
+                            {
+                                isOverlapping = true;
+                                overlappingNote = heldNote;
+                                break;
+                            }
+
+                            heldNote = heldNote.NextInColumn(0);
+                        }
+
+                        // calculate the release bonus if theres an overlapping LN
+                        if (isOverlapping)
+                        {
+                            double closestActionTime = Math.Min(Math.Abs(overlappingNote.EndTime - endTime), Math.Abs(endTime - overlappingNote.StartTime));
+                            releaseBonus += adjacentImpactness *
+                                            DifficultyCalculationUtils.Logistic(x: closestActionTime, multiplier: release_bonus_multiplier, midpointOffset: release_bonus_threshold);
+                        }
+                    }
+                }
+
+                // WIP: overallReleaseIntensity
+                // idea taken from sunny rework
+
             }
 
-            if (isOverlapping)
-            {
-                double overlapStartBonus = DifficultyCalculationUtils.Logistic(x: closestOverlapStartTime, multiplier: release_multiplier, midpointOffset: release_threshold);
-                double overlapEndBonus = DifficultyCalculationUtils.Logistic(x: closestOverlapEndTime, multiplier: release_multiplier, midpointOffset: release_threshold);
-                overlapBonus = Math.Min(overlapStartBonus, overlapEndBonus) * overlap_max_bonus;
-            }
-            // {
-            //     double overlapStartBonus = Math.Min(Math.Pow(closestOverlapStartTime / release_threshold, Math.Log2(release_exponent)), 1);
-            //     double overlapEndBonus = Math.Min(Math.Pow(closestOverlapEndTime / release_threshold, Math.Log2(release_exponent)), 1);
-            //     double overlapStartBonus = DifficultyCalculationUtils.Logistic(x: closestOverlapStartTime, multiplier: release_multiplier, midpointOffset: release_threshold);
-            //     double overlapStartBonus = 1;
-            //     double overlapEndBonus = DifficultyCalculationUtils.Logistic(x: closestOverlapEndTime, multiplier: release_multiplier, midpointOffset: release_threshold);
-            //     overlapBonus = Math.Min(overlapStartBonus, overlapEndBonus) * overlap_max_bonus;
-            // }
+            // sqrt for press bonus that > 1
+            pressBonus = (pressBonus > 1 ? Math.Sqrt(pressBonus) : pressBonus) * press_bonus_max_value;
 
-            // proposal function
-            // (x / threshold) ^ log2(exponent)
-            // at x = threshold / 2, the bonus equals to 1/exponent
-            // at x = threshold, the bonus reaches its maximum of 1.0x
+            // holdBonus held the total intensity before
+            // and we calculate the actual holdBonus
+            holdBonus = (1 - Math.Pow(2, -holdBonus / hold_intensity_steepness)) * hold_bonus_max_value;
 
-            // hold bonus decay uses sigmoid function
-            // Math.Min(Math.Pow(furthestHoldStartTime / hold_threshold, Math.Log2(hold_exponent)), 1);
+            // sqrt for release bonus that > 1
+            releaseBonus = (releaseBonus > 1 ? Math.Sqrt(releaseBonus) : releaseBonus) * release_bonus_max_value;
 
-            if (isHeld)
-            {
-                double holdStartBonus = DifficultyCalculationUtils.Logistic(x: furthestHoldStartTime, multiplier: hold_multiplier, midpointOffset: hold_threshold);
-                double holdEndBonus = DifficultyCalculationUtils.Logistic(x: furthestHoldEndTime, multiplier: hold_multiplier, midpointOffset: hold_threshold);
-                // double holdBonusDecay = DifficultyCalculationUtils.Logistic(x: holdReferenceValue, multiplier: -decay_multiplier, midpointOffset: decay_threshold);
-                holdBonus = Math.Min(holdStartBonus, holdEndBonus) * hold_max_bonus;
-            }
-
-            // ln length bonus
-            // mantissa ^ -(x / threshold)
-            // the shorter the LN is, the higher the bonus is, cuz it's generally hard to get
-            // rainbow 300s on very short lns while the ratio is a big part of pp algorithm
-            // at x = threshold, the bonus equals to 1 / mantissa
-            // note: the RC ensures that the vast majority of LNs in ranked maps will be longer than 30ms
-            // note2: the ln detection below is a provisional method
-
-            //if (Precision.DefinitelyBigger(endTime, startTime, 1))
-            //{
-            //    double noteLength = Math.Abs(endTime - startTime);
-            //    lengthBonus = Math.Max(Math.Pow(length_mantissa, -1 * noteLength / length_threshold), length_min_bonus) * length_max_bonus;
-            //}
-
-            return (1 + overlapBonus) * (1 + holdBonus) * (1 + lengthBonus);
+            return 1 + pressBonus + holdBonus + releaseBonus;
+            // return (1 + pressBonus) * (1 + holdBonus) * (1 + releaseBonus);
         }
     }
 }
